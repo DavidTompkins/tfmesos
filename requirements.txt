@@ -5,7 +5,7 @@ mock==2.0.0
 numpy==1.11.3
 pbr==1.10.0
 protobuf==3.1.0
-pymesos==0.2.9
+pymesos==0.2.13
 six==1.10.0
-tensorflow-gpu==0.12.0
+tensorflow-gpu==1.1.0
 zkpython==0.4.2
