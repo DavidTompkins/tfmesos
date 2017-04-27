@@ -1,4 +1,4 @@
-FROM tensorflow/tensorflow:1.0.1
+FROM tensorflow/tensorflow:latest-gpu
 
 RUN apt-get update && apt-get install --no-install-recommends -y \
         gcc \
