@@ -69,6 +69,8 @@ def main(argv):
             ps_hosts=ps_hosts, worker_hosts=worker_hosts,
             job_name=job_name, task_index=task_index
         )
+        if job_name == "ps":
+            cmd = "CUDA_VISIBLE_DEVICES='' " + cmd
         subprocess.check_call(cmd, shell=True, cwd=cwd, stdout=forward_fd)
         if forward_fd:
             forward_fd.close()
