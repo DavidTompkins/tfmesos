@@ -23,6 +23,8 @@ def main(argv):
     c.connect(maddr)
     send(c, (mesos_task_id, addr))
     response = recv(c)
+    for x in response:
+        print (x)
     cluster_def = response["cluster_def"]
     job_name = response["job_name"]
     task_index = response["task_index"]
@@ -30,7 +32,7 @@ def main(argv):
     gpus = response["gpus"]
     cmd = response["cmd"]
     cwd = response["cwd"]
-    forward_addresses = response['forward_addresses']
+    forward_addresses = response.get('forward_addresses', {})
     protocol = response['protocol']
 
     forward_fd = None
