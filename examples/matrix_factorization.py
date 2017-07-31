@@ -12,7 +12,7 @@ INFINITY = 10e+12
 
 class NMF(object):
 
-    def __init__(self, np_matrix, rank,
+    def __init__(self, session, np_matrix, rank,
                  learning_rate=0.1):
         matrix = tf.constant(np_matrix, dtype=tf.float32)
         scale = 2 * np.sqrt(np_matrix.mean() / rank)
@@ -36,13 +36,16 @@ class NMF(object):
         self.loss = f_norm + constraint
         self.constraint = constraint
 
+        self.session = session
         self.optimizer = tf.train.GradientDescentOptimizer(
             learning_rate
         ).minimize(self.loss)
 
-    def run(self, session):
+    def run(self):
+        self.session.run(tf.initialize_all_variables())
+
         with tf.device("/job:worker/task:0"):
-            current_loss, current_constraint, _ = session.run([
+            current_loss, current_constraint, _ = self.session.run([
                 self.loss, self.constraint, self.optimizer
             ])
 
@@ -63,12 +66,11 @@ def main(argv):
         },
     ]
     mesos_master = argv[1]
-    nmf = NMF(matrix, 200)
-    with cluster(jobs_def, master=mesos_master) as c:
-        with tf.Session(c.targets['/job:worker/task:1']) as session:
-            session.run(tf.global_variables_initializer())
+    with cluster(jobs_def, master=mesos_master) as targets:
+        with tf.Session(targets['/job:worker/task:1']) as session:
+            nmf = NMF(session, matrix, 200)
             for i in range(max_iter):
-                mat_w, mat_h, loss = nmf.run(session)
+                mat_w, mat_h, loss = nmf.run()
                 print("loss#%d: %s" % (i, loss))
 
     err = np.power(matrix - np.matmul(mat_w, mat_h), 2)

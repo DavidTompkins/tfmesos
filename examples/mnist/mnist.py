@@ -8,8 +8,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-w', '--nworker', type=int, default=1)
 parser.add_argument('-s', '--nserver', type=int, default=1)
 parser.add_argument('-Gw', '--worker-gpus', type=int, default=0)
-parser.add_argument('-C', '--containerizer_type', choices=["MESOS", "DOCKER"], type=lambda s: s.upper(), nargs='?')
-parser.add_argument('-P', '--protocol', type=str)
+parser.add_argument('-C', '--containerizer_type', type=str, default=None)
 args, cmd = parser.parse_known_args()
 master = cmd[0] if cmd else None
 nworker = args.nworker
@@ -17,10 +16,9 @@ nserver = args.nserver
 
 extra_kw = {}
 if args.containerizer_type:
-    extra_kw['containerizer_type'] = args.containerizer_type
-
-if args.protocol:
-    extra_kw['protocol'] = args.protocol
+    containerizer_type = args.containerizer_type.upper()
+    assert containerizer_type in ['MESOS', 'DOCKER']
+    extra_kw['containerizer_type'] = containerizer_type
 
 
 jobs_def = [
@@ -37,7 +35,7 @@ jobs_def = [
 
 _lock = RLock()
 mnist = read_data_sets("MNIST_data/", one_hot=True)
-with cluster(jobs_def, master=master, quiet=False, **extra_kw) as c:
+with cluster(jobs_def, master=master, quiet=False, **extra_kw) as targets:
     graph = tf.Graph()
     with graph.as_default():
         with tf.device(tf.train.replica_device_setter(ps_tasks=nserver)):
@@ -57,12 +55,17 @@ with cluster(jobs_def, master=master, quiet=False, **extra_kw) as c:
             correct_prediction = tf.equal(tf.argmax(y,1), tf.argmax(y_,1))
             accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-            init_op = tf.global_variables_initializer()
+            version = tuple(map(int, (tf.__version__.split("."))))
+            if version < (0, 12, 0):
+                init_op = tf.initialize_all_variables()
+            else:
+                init_op = tf.global_variables_initializer()
+
             coord = tf.train.Coordinator()
 
         def train(i):
             with graph.as_default():
-                with tf.Session(c.targets['/job:worker/task:%d' % i]) as sess:
+                with tf.Session(targets['/job:worker/task:%d' % i]) as sess:
                     step = 0
                     while not coord.should_stop() and step < 10000:
                         with _lock:
@@ -71,7 +74,7 @@ with cluster(jobs_def, master=master, quiet=False, **extra_kw) as c:
                         _, step = sess.run([steps[i], global_step], feed_dict={x: batch_xs, y_: batch_ys})
                     coord.request_stop()
 
-        with tf.Session(c.targets['/job:worker/task:0']) as sess:
+        with tf.Session(targets['/job:worker/task:0']) as sess:
             sess.run(init_op)
             threads = [Thread(target=train, args=(i,)) for i in range(nworker)]
             for t in threads:

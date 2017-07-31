@@ -1,11 +1,12 @@
 from contextlib import contextmanager
 from tfmesos.scheduler import Job, TFMesosScheduler
 
-__VERSION__ = '0.0.5'
+__VERSION__ = '0.0.3'
 
 
 @contextmanager
-def cluster(jobs, **kw):
+def cluster(jobs, master=None, name=None, quiet=False,
+            volumes={}, local_task=None, containerizer_type=None):
     if isinstance(jobs, dict):
         jobs = [Job(**jobs)]
 
@@ -14,9 +15,10 @@ def cluster(jobs, **kw):
 
     jobs = [job if isinstance(job, Job) else Job(**job)
             for job in jobs]
-    s = TFMesosScheduler(jobs, **kw)
+    s = TFMesosScheduler(jobs, master=master, name=name, quiet=quiet,
+                         volumes=volumes, local_task=local_task,
+                         containerizer_type=containerizer_type)
     try:
-        s.start()
-        yield s
+        yield s.start()
     finally:
         s.stop()

@@ -57,8 +57,7 @@ class Task(object):
         >''' % (self.mesos_task_id, self.addr))
 
     def to_task_info(self, offer, master_addr, gpu_uuids=[],
-                     gpu_resource_type=None, containerizer_type='MESOS',
-                     force_pull_image=False):
+                     gpu_resource_type=None, containerizer_type='MESOS'):
         ti = Dict()
         ti.task_id.value = str(self.mesos_task_id)
         ti.agent_id.value = offer.agent_id.value
@@ -83,7 +82,6 @@ class Task(object):
             if containerizer_type == 'DOCKER':
                 ti.container.type = 'DOCKER'
                 ti.container.docker.image = image
-                ti.container.docker.force_pull_image = force_pull_image
 
                 ti.container.docker.parameters = parameters = []
                 p = Dict()
@@ -120,8 +118,6 @@ class Task(object):
                 ti.container.type = 'MESOS'
                 ti.container.mesos.image.type = 'DOCKER'
                 ti.container.mesos.image.docker.name = image
-                # "cached" means the opposite of "force_pull_image"
-                ti.container.mesos.image.cached = not force_pull_image
 
             else:
                 assert False, (
@@ -173,24 +169,17 @@ class Task(object):
 
 class TFMesosScheduler(Scheduler):
 
-    def __init__(self, task_spec, role=None, master=None, name=None,
-                 quiet=False, volumes={}, containerizer_type=None,
-                 force_pull_image=False, forward_addresses=None,
-                 protocol='grpc'):
+    def __init__(self, task_spec, master=None, name=None, quiet=False,
+                 volumes={}, local_task=None, containerizer_type=None):
         self.started = False
         self.master = master or os.environ['MESOS_MASTER']
         self.name = name or '[tensorflow] %s %s' % (
             os.path.abspath(sys.argv[0]), ' '.join(sys.argv[1:]))
+        self.local_task = local_task
         self.task_spec = task_spec
         self.containerizer_type = containerizer_type
-        self.force_pull_image = force_pull_image
-        self.protocol = protocol
-        self.forward_addresses = forward_addresses
-        self.role = role or '*'
         self.tasks = []
-        self.job_finished = {}
         for job in task_spec:
-            self.job_finished[job.name] = 0
             for task_index in range(job.start, job.num):
                 mesos_task_id = len(self.tasks)
                 self.tasks.append(
@@ -258,27 +247,25 @@ class TFMesosScheduler(Scheduler):
                     task.to_task_info(
                         offer, self.addr, gpu_uuids=gpu_uuids,
                         gpu_resource_type=gpu_resource_type,
-                        containerizer_type=self.containerizer_type,
-                        force_pull_image=self.force_pull_image
+                        containerizer_type=self.containerizer_type
                     )
                 )
 
             driver.launchTasks(offer.id, offered_tasks)
 
-    @property
-    def targets(self):
+    def _start_tf_cluster(self):
+        cluster_def = {}
+
         targets = {}
         for task in self.tasks:
             target_name = '/job:%s/task:%s' % (task.job_name, task.task_index)
             grpc_addr = 'grpc://%s' % task.addr
             targets[target_name] = grpc_addr
-        return targets
-
-    def _start_tf_cluster(self):
-        cluster_def = {}
-
-        for task in self.tasks:
             cluster_def.setdefault(task.job_name, []).append(task.addr)
+
+        if self.local_task:
+            job_name, addr = self.local_task
+            cluster_def.setdefault(job_name, []).insert(0, addr)
 
         for task in self.tasks:
             response = {
@@ -290,8 +277,6 @@ class TFMesosScheduler(Scheduler):
                 'cmd': task.cmd,
                 'cwd': os.getcwd(),
                 'cluster_def': cluster_def,
-                'forward_addresses': self.forward_addresses,
-                'protocol': self.protocol
             }
             send(task.connection, response)
             assert recv(task.connection) == 'ok'
@@ -303,6 +288,7 @@ class TFMesosScheduler(Scheduler):
 
             )
             task.connection.close()
+        return targets
 
     def start(self):
 
@@ -318,7 +304,6 @@ class TFMesosScheduler(Scheduler):
             framework.user = getpass.getuser()
             framework.name = self.name
             framework.hostname = socket.gethostname()
-            framework.role = self.role
 
             self.driver = MesosSchedulerDriver(
                 self, framework, self.master, use_addict=True
@@ -338,7 +323,7 @@ class TFMesosScheduler(Scheduler):
                         c.close()
 
             self.started = True
-            self._start_tf_cluster()
+            return self._start_tf_cluster()
         except Exception:
             self.stop()
             raise
@@ -366,10 +351,8 @@ class TFMesosScheduler(Scheduler):
                 if update.state != 'TASK_FINISHED':
                     logger.error('Task failed: %s, %s', task, update.message)
                     raise RuntimeError(
-                        'Task %s failed! %s' % (task, update.message)
+                        'Task %s failed! %s' % (id, update.message)
                     )
-                else:
-                    self.job_finished[task.job_name] += 1
             else:
                 logger.warn('Task failed: %s, %s', task, update.message)
                 if task.connection:
@@ -403,10 +386,4 @@ class TFMesosScheduler(Scheduler):
 
         if hasattr(self, 'driver'):
             self.driver.stop()
-            self.driver.join()
             del self.driver
-
-    def finished(self):
-        return any(
-            self.job_finished[job.name] >= job.num for job in self.task_spec
-        )

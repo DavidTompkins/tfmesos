@@ -2,6 +2,7 @@
 
 import sys
 import socket
+import resource
 import subprocess
 import tensorflow as tf
 from tfmesos.utils import send, recv
@@ -18,43 +19,38 @@ def main(argv):
     addr = "%s:%s" % (socket.gethostname(), lfd.getsockname()[1])
     job_name = None
     task_index = None
+    mem = None
     cpus = None
     c = socket.socket()
     c.connect(maddr)
     send(c, (mesos_task_id, addr))
     response = recv(c)
-    for x in response:
-        print (x)
     cluster_def = response["cluster_def"]
     job_name = response["job_name"]
     task_index = response["task_index"]
     cpus = response["cpus"]
+    mem = response["mem"]
     gpus = response["gpus"]
     cmd = response["cmd"]
     cwd = response["cwd"]
-    forward_addresses = response.get('forward_addresses', {})
-    protocol = response['protocol']
-
-    forward_fd = None
-    grpc_addr = '/job:%s/task:%s' % (job_name, task_index)
-    if forward_addresses and grpc_addr in forward_addresses:
-        addr = forward_addresses[grpc_addr]
-        forward_fd = socket.socket()
-        forward_fd.connect(addr)
 
     send(c, 'ok')
     c.close()
-
     if cmd is None:
         server_def = tf.train.ServerDef(
             cluster=tf.train.ClusterSpec(cluster_def).as_cluster_def(),
             job_name=job_name,
             task_index=task_index,
-            protocol=protocol,
+            protocol="grpc",
         )
 
         server_def.default_session_config.device_count["CPU"] = int(cpus)
         server_def.default_session_config.device_count["GPU"] = int(gpus)
+
+        (soft, hard) = resource.getrlimit(resource.RLIMIT_AS)
+        soft = min(float(mem), soft, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (soft, hard))
+
         server = tf.train.Server(server_def)
 
         try:
@@ -73,9 +69,7 @@ def main(argv):
         )
         if job_name == "ps":
             cmd = "CUDA_VISIBLE_DEVICES='' " + cmd
-        subprocess.check_call(cmd, shell=True, cwd=cwd, stdout=forward_fd)
-        if forward_fd:
-            forward_fd.close()
+        subprocess.check_call(cmd, shell=True, cwd=cwd)
 
 
 if __name__ == '__main__':
